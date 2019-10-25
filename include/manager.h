@@ -26,6 +26,12 @@ class Manager : public Service {
 		services.emplace_back(std::move(service));
 	}
 	
+	inline void forEachChild(const std::function<void(const std::shared_ptr<Service> &)>& handler) {
+		for (const auto & service : services) {
+			handler(service);
+		}
+	}
+	
 	/**
 	 * Initializes and starts all services, waiting for any to report that they are no longer operational or the continuePredicate to return false, with a caller-determined periodic sleep.
 	 * @return TRUE if all services were started successfully, FALSE otherwise

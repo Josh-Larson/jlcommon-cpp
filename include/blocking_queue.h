@@ -201,6 +201,7 @@ class LinkedBlockingQueue : public BlockingQueue<T> {
 			mData(rhs.mData) { }
 	LinkedBlockingQueue & operator =(const LinkedBlockingQueue & rhs) noexcept {
 		mData = rhs.mData;
+		return *this;
 	}
 	
 	LinkedBlockingQueue(const LinkedBlockingQueue && rhs) = delete;
@@ -212,6 +213,7 @@ class LinkedBlockingQueue : public BlockingQueue<T> {
 			mData(std::move(rhs.mData)) { }
 	LinkedBlockingQueue & operator =(LinkedBlockingQueue && rhs) noexcept {
 		mData = std::move(rhs.mData);
+		return *this;
 	}
 	
 	private:

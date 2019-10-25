@@ -5,6 +5,7 @@
 #pragma once
 
 #include <blocking_queue.h>
+#include <log.h>
 
 #include <unordered_map>
 #include <utility>

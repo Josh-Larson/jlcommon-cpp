@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include <intent_manager.h>
+
 #include <string>
 #include <utility>
+#include <memory>
 
 namespace jlcommon {
 

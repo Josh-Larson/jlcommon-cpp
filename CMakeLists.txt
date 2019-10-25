@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 
 file(GLOB HEADERS include/*.h)
 file(GLOB SOURCES src/*.cpp)
-add_library(jlcommon SHARED ${SOURCES})
+add_library(jlcommon SHARED ${SOURCES} ../services/DefenseDaemonManager.cpp ../services/DefenseDaemonManager.h ../services/DefenseDaemonRadarService.cpp ../services/DefenseDaemonRadarService.h)
 set_target_properties(jlcommon PROPERTIES VERSION ${PROJECT_VERSION})
 set_target_properties(jlcommon PROPERTIES SOVERSION 1)
 target_include_directories(jlcommon PRIVATE include)
