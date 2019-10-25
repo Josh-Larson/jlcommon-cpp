@@ -15,18 +15,22 @@
 #include <chrono>
 #include <thread>
 #include <string>
+#include <type_traits>
 
 namespace jlcommon {
 
+template<typename T>
 class Manager : public Service {
+	static_assert(std::is_base_of<Service, T>::value, "Manager child-type must inherit from Service");
+	
 	public:
 	~Manager() override = default;
 	
-	void addChild(std::unique_ptr<Service> service) {
+	void addChild(std::unique_ptr<T> service) {
 		services.emplace_back(std::move(service));
 	}
 	
-	inline void forEachChild(const std::function<void(const std::shared_ptr<Service> &)>& handler) {
+	inline void forEachChild(const std::function<void(const std::shared_ptr<T> &)>& handler) {
 		for (const auto & service : services) {
 			handler(service);
 		}
@@ -106,7 +110,7 @@ class Manager : public Service {
 		return true;
 	}
 	
-	bool isOperational() const noexcept override {
+	[[nodiscard]] bool isOperational() const noexcept override {
 		for (auto & s : startedServices) {
 			if (!s->isOperational())
 				return false;
@@ -155,7 +159,7 @@ class Manager : public Service {
 		return true;
 	}
 	
-	std::string name() const override {
+	[[nodiscard]] std::string name() const override {
 		return "Manager";
 	}
 	
@@ -167,9 +171,9 @@ class Manager : public Service {
 	}
 	
 	private:
-	std::vector<std::shared_ptr<Service>> services;
-	std::vector<std::shared_ptr<Service>> initializedServices;
-	std::vector<std::shared_ptr<Service>> startedServices;
+	std::vector<std::shared_ptr<T>> services;
+	std::vector<std::shared_ptr<T>> initializedServices;
+	std::vector<std::shared_ptr<T>> startedServices;
 	
 };
 
