@@ -150,6 +150,8 @@ class IntentManager {
 		if (it != mHandlers.end()) {
 			auto runner = it->second; // Stored as local variable to ensure memory is not cleaned up
 			reinterpret_cast<IntentRunner<T>*>(runner.get())->broadcast(mExecutionQueue, std::forward<T>(arg));
+		} else {
+			Log::warn("No matching subscribers for intent type: %s", typeid(T).name());
 		}
 	}
 	
