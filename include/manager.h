@@ -165,7 +165,7 @@ class Manager : public Service {
 	
 	void setIntentManager(std::shared_ptr<IntentManager> intentManager) noexcept override {
 		Service::setIntentManager(intentManager);
-		for (auto & s : initializedServices) {
+		for (auto & s : services) {
 			s->setIntentManager(intentManager);
 		}
 	}
