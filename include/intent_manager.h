@@ -72,7 +72,8 @@ class IntentRunner : public IntentManagerHelper::GenericIntentRunner {
 		mHandlers.emplace_back(std::make_shared<IntentManagerHelper::IntentHandler<T>>(std::move(handler), std::move(name)));
 	}
 	
-	void broadcast(LinkedBlockingQueue<IntentCallbackCompiled> & executionQueue, const T & arg) noexcept {
+	unsigned int broadcast(LinkedBlockingQueue<IntentCallbackCompiled> & executionQueue, const T & arg) noexcept {
+		unsigned int handlerCount = 0;
 		for (auto & f : mHandlers) {
 			executionQueue.add([f, arg]() {
 				try {
@@ -90,7 +91,9 @@ class IntentRunner : public IntentManagerHelper::GenericIntentRunner {
 					Log::error("Exception thrown when handling %s in %s. Unknown Error.", typeid(T).name(), f->name.c_str());
 				}
 			});
+			handlerCount++;
 		}
+		return handlerCount;
 	}
 	
 	std::map<std::pair<std::string, std::string>, uint64_t> getIntentTiming() override {
@@ -145,13 +148,16 @@ class IntentManager {
 	}
 	
 	template<typename T>
-	void broadcast(T && arg) noexcept {
+	unsigned int broadcast(T && arg) noexcept {
 		auto it = mHandlers.find(std::type_index(typeid(T)));
 		if (it != mHandlers.end()) {
 			auto runner = it->second; // Stored as local variable to ensure memory is not cleaned up
-			reinterpret_cast<IntentRunner<T>*>(runner.get())->broadcast(mExecutionQueue, std::forward<T>(arg));
+			return reinterpret_cast<IntentRunner<T>*>(runner.get())->broadcast(mExecutionQueue, std::forward<T>(arg));
 		} else {
+#ifdef DEBUG_INTENT_MANAGER_NO_SUBSCRIBERS
 			Log::warn("No matching subscribers for intent type: %s", typeid(T).name());
+#endif
+			return 0;
 		}
 	}
 	
