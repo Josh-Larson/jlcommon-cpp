@@ -4,26 +4,40 @@
 
 #pragma once
 
-#include <service.h>
-#include <log.h>
+#include "service.h"
+#include "log.h"
 
 #include <vector>
 #include <memory>
 #include <iostream>
 #include <functional>
-#include <unistd.h>
 #include <chrono>
 #include <thread>
 #include <string>
+#include <type_traits>
 
 namespace jlcommon {
 
-class Manager : public Service {
+template<typename T>
+class Manager : public T {
+	static_assert(std::is_base_of<Service, T>::value, "Manager child-type must inherit from Service");
+	
 	public:
 	~Manager() override = default;
 	
-	void addChild(std::unique_ptr<Service> service) {
+	void addChild(std::shared_ptr<T> service) {
 		services.emplace_back(std::move(service));
+	}
+	
+	template<typename Service>
+	void addChild() {
+		services.emplace_back(std::make_shared<Service>());
+	}
+	
+	inline void forEachChild(const std::function<void(const std::shared_ptr<T> &)>& handler) {
+		for (const auto & service : services) {
+			handler(service);
+		}
 	}
 	
 	/**
@@ -100,7 +114,7 @@ class Manager : public Service {
 		return true;
 	}
 	
-	bool isOperational() const noexcept override {
+	[[nodiscard]] bool isOperational() const noexcept override {
 		for (auto & s : startedServices) {
 			if (!s->isOperational())
 				return false;
@@ -149,21 +163,21 @@ class Manager : public Service {
 		return true;
 	}
 	
-	std::string name() const override {
+	[[nodiscard]] std::string name() const noexcept override {
 		return "Manager";
 	}
 	
 	void setIntentManager(std::shared_ptr<IntentManager> intentManager) noexcept override {
-		Service::setIntentManager(intentManager);
-		for (auto & s : initializedServices) {
+		T::setIntentManager(intentManager);
+		for (auto & s : services) {
 			s->setIntentManager(intentManager);
 		}
 	}
 	
 	private:
-	std::vector<std::shared_ptr<Service>> services;
-	std::vector<std::shared_ptr<Service>> initializedServices;
-	std::vector<std::shared_ptr<Service>> startedServices;
+	std::vector<std::shared_ptr<T>> services;
+	std::vector<std::shared_ptr<T>> initializedServices;
+	std::vector<std::shared_ptr<T>> startedServices;
 	
 };
 

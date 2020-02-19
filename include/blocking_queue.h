@@ -22,12 +22,12 @@ class BlockingQueue {
 	/*
 	 * Getters
 	 */
-	int size() const noexcept {
-		return mSize();
+	[[nodiscard]] int size() const noexcept {
+		return implSize();
 	}
 	
-	bool empty() const noexcept {
-		return mSize() <= 0;
+	[[nodiscard]] bool empty() const noexcept {
+		return implSize() <= 0;
 	}
 	
 	/*
@@ -39,24 +39,25 @@ class BlockingQueue {
 	
 	T remove() {
 		mLock.lock();
-		if (mSize() == 0) {
+		if (implSize() == 0) {
 			mLock.unlock();
 			throw QueueException("Empty Queue");
 		}
 		T ret;
-		mPoll(ret);
+		implPeek(ret);
+		implPoll();
 		mLock.unlock();
 		return ret;
 	}
 	
 	T element() {
 		mLock.lock();
-		if (mSize() == 0) {
+		if (implSize() == 0) {
 			mLock.unlock();
 			throw QueueException("Empty Queue");
 		}
 		T ret;
-		mPeek(ret);
+		implPeek(ret);
 		mLock.unlock();
 		return ret;
 	}
@@ -70,35 +71,36 @@ class BlockingQueue {
 	
 	T poll() noexcept {
 		mLock.lock();
-		if (mSize() == 0) {
+		if (implSize() == 0) {
 			mLock.unlock();
 			return nullptr;
 		}
 		T ret;
-		mPoll(ret);
+		implPeek(ret);
+		implPoll();
 		mLock.unlock();
 		return ret;
 	}
 	
 	bool poll(T & container) noexcept {
 		mLock.lock();
-		if (mSize() == 0) {
-			mLock.unlock();
-			return false;
+		const bool hasElement = implSize() > 0;
+		if (hasElement) {
+			implPeek(container);
+			implPoll();
 		}
-		mPoll(container);
 		mLock.unlock();
-		return true;
+		return hasElement;
 	}
 	
 	T peek() noexcept {
 		mLock.lock();
-		if (mSize() == 0) {
+		if (implSize() == 0) {
 			mLock.unlock();
 			return nullptr;
 		}
 		T ret;
-		mPeek(ret);
+		implPeek(ret);
 		mLock.unlock();
 		return ret;
 	}
@@ -112,12 +114,13 @@ class BlockingQueue {
 	
 	bool take(T & container, const std::function<bool()>& stopBlocking) noexcept {
 		std::unique_lock<std::mutex> lk(mLock);
-		if (mAllowBlocking && mSize() == 0 && !stopBlocking())
-			mCondition.wait(lk, [this, &stopBlocking]{return !mAllowBlocking || mSize() != 0 || stopBlocking();});
+		if (mAllowBlocking && implSize() == 0 && !stopBlocking())
+			mCondition.wait(lk, [this, &stopBlocking]{return !mAllowBlocking || implSize() != 0 || stopBlocking();});
 		
-		if (mSize() == 0)
+		if (implSize() == 0)
 			return false;
-		mPoll(container);
+		implPeek(container);
+		implPoll();
 		return true;
 	}
 	
@@ -144,36 +147,33 @@ class BlockingQueue {
 	}
 	
 	protected:
-	BlockingQueue(std::function<void(T&&)> add, std::function<void(T&)> peek, std::function<void(T&)> poll, std::function<int()> size) :
+	BlockingQueue() :
 			mLock(),
 			mCondition(),
-			mAdd(std::move(add)),
-			mPeek(std::move(peek)),
-			mPoll(std::move(poll)),
-			mSize(std::move(size)),
-			mAllowBlocking(true) {
-		
-	}
+			mAllowBlocking(true) { }
+	
+	protected:
+	virtual void implAdd(T && item) = 0;
+	virtual void implAdd(const T & item) = 0;
+	virtual void implPeek(T & item) = 0;
+	virtual void implPoll() = 0;
+	[[nodiscard]] virtual size_t implSize() const = 0;
 	
 	private:
 	std::mutex mLock;
 	std::condition_variable mCondition;
-	const std::function<void(T)> mAdd;
-	const std::function<void(T&)> mPeek;
-	const std::function<void(T&)> mPoll;
-	const std::function<int()> mSize;
 	bool mAllowBlocking;
 	
-	void internalAdd(const T && item) {
+	inline void internalAdd(const T & item) {
 		mLock.lock();
-		mAdd(std::move(item));
+		implAdd(item);
 		mCondition.notify_one();
 		mLock.unlock();
 	}
 	
-	void internalAdd(T && item) {
+	inline void internalAdd(T && item) {
 		mLock.lock();
-		mAdd(std::move(item));
+		implAdd(std::move(item));
 		mCondition.notify_one();
 		mLock.unlock();
 	}
@@ -181,70 +181,48 @@ class BlockingQueue {
 };
 
 template <typename T>
-class LinkedBlockingQueue : public BlockingQueue<T> {
+class LinkedBlockingQueue final : public BlockingQueue<T> {
 	public:
-	LinkedBlockingQueue() :
-			BlockingQueue<T>([this](T && item){mData.emplace_back(std::move(item));},
-							 [this](T & item){ item = std::move(mData.front()); },
-							 [this](T & item){ item = std::move(mData.front()); mData.pop_front(); },
-							 [this](){return mData.size();}),
-			mData() {
-		
-	}
+	LinkedBlockingQueue() : BlockingQueue<T>(), mData() { }
 	
-	LinkedBlockingQueue(const LinkedBlockingQueue & rhs) = delete;
-	LinkedBlockingQueue(LinkedBlockingQueue & rhs) noexcept :
-			BlockingQueue<T>([this](T && item){mData.emplace_back(std::move(item));},
-			                 [this](T & item){ item = std::move(mData.front()); },
-			                 [this](T & item){ item = std::move(mData.front()); mData.pop_front(); },
-			                 [this](){return mData.size();}),
-			mData(rhs.mData) { }
-	LinkedBlockingQueue & operator =(const LinkedBlockingQueue & rhs) noexcept {
-		mData = rhs.mData;
-	}
-	
-	LinkedBlockingQueue(const LinkedBlockingQueue && rhs) = delete;
-	LinkedBlockingQueue(LinkedBlockingQueue && rhs) noexcept :
-			BlockingQueue<T>([this](T && item){mData.emplace_back(std::move(item));},
-			                 [this](T & item){ item = std::move(mData.front()); },
-			                 [this](T & item){ item = std::move(mData.front()); mData.pop_front(); },
-			                 [this](){return mData.size();}),
-			mData(std::move(rhs.mData)) { }
-	LinkedBlockingQueue & operator =(LinkedBlockingQueue && rhs) noexcept {
-		mData = std::move(rhs.mData);
-	}
+	protected:
+	void implAdd(T && item) final { mData.emplace_back(std::move(item)); };
+	void implAdd(const T & item) final { mData.emplace_back(item); };
+	void implPeek(T & item) final { item = std::move(mData.front()); };
+	void implPoll() final { mData.pop_front(); };
+	[[nodiscard]] size_t implSize() const final { return  mData.size(); };
 	
 	private:
 	std::list<T> mData;
 };
 
 template <typename T>
-class ArrayBlockingQueue : public BlockingQueue<T> {
+class ArrayBlockingQueue final : public BlockingQueue<T> {
 	public:
-	ArrayBlockingQueue() :
-			BlockingQueue<T>([this](T && item){mData.push_back(item);},
-			                 [this](T & item){ item = std::move(mData.front()); },
-			                 [this](T & item){ item = mData.front(); mData.erase(mData.begin()); },
-			                 [this](){return mData.size();}),
-			mData() {
-		
-	}
+	ArrayBlockingQueue() : BlockingQueue<T>(), mData() {}
+	
+	protected:
+	void implAdd(T && item) final { mData.emplace_back(std::move(item)); };
+	void implAdd(const T & item) final { mData.emplace_back(item); };
+	void implPeek(T & item) final { item = std::move(mData.front()); };
+	void implPoll() final { mData.erase(mData.begin()); };
+	[[nodiscard]] size_t implSize() const final { return  mData.size(); };
 	
 	private:
 	std::vector<T> mData;
 };
 
 template <typename T>
-class PriorityBlockingQueue : public BlockingQueue<T> {
+class PriorityBlockingQueue final : public BlockingQueue<T> {
 	public:
-	PriorityBlockingQueue() :
-			BlockingQueue<T>([this](T && item){mData.push(item);},
-			                 [this](T & item){ item = std::move(mData.top()); },
-			                 [this](T & item){ item = mData.top(); mData.pop(); },
-			                 [this](){return mData.size();}),
-			mData() {
-		
-	}
+	PriorityBlockingQueue() : BlockingQueue<T>(), mData() { }
+	
+	protected:
+	void implAdd(T && item) final { mData.emplace(std::move(item)); };
+	void implAdd(const T & item) final { mData.emplace(item); };
+	void implPeek(T & item) final { item = std::move(mData.top()); };
+	void implPoll() final { mData.pop(); };
+	[[nodiscard]] size_t implSize() const final { return  mData.size(); };
 	
 	private:
 	std::priority_queue<T> mData;

@@ -2,12 +2,13 @@
 #include "blocking_queue.h"
 
 #include <vector>		// std::vector
-#include <utility>		// std::pair
+#include <utility>		// std::pair, std::forward
 #include <thread>
 #include <atomic>
 #include <cstdint>
 #include <queue>
 #include <chrono>
+#include <algorithm>
 
 namespace jlcommon {
 
@@ -65,8 +66,8 @@ class ThreadPool {
 	}
 	
 	protected:
-	virtual void onCompleted(T & task) noexcept { }
-	virtual bool getTask(T & task) noexcept = 0;
+	virtual void onCompleted(T && task) noexcept { }
+	virtual void runTask() noexcept = 0;
 	
 	private:
 	std::thread ** mThreads;
@@ -76,13 +77,9 @@ class ThreadPool {
 	unsigned int mThreadCount;
 	
 	void runWorker() {
-		T task;
 		mThreadsStarted.fetch_add(1);
 		while (mStarted) {
-			if (getTask(task)) {
-				task();
-				onCompleted(task);
-			}
+			runTask();
 		}
 		mThreadsStarted.fetch_sub(1);
 	}
@@ -113,8 +110,12 @@ class FifoThreadPool : public ThreadPool<T> {
 	}
 	
 	protected:
-	bool getTask(T & task) noexcept override {
-		return mQueue.take(task, [](){ return false; });
+	void runTask() noexcept override {
+		T task;
+		if (mQueue.take(task, [](){ return false; })) {
+			task();
+			this->onCompleted(std::move(task));
+		}
 	}
 	
 	private:
@@ -124,10 +125,11 @@ class FifoThreadPool : public ThreadPool<T> {
 template<typename T>
 class SchedulingInfo {
 	public:
-	SchedulingInfo(std::chrono::steady_clock::time_point nextExecution, const std::chrono::duration<unsigned long int, std::ratio<1, 1000000>> delay, const T & task, const unsigned char mode) :
+	template<typename TF>
+	SchedulingInfo(std::chrono::steady_clock::time_point nextExecution, const std::chrono::duration<unsigned long int, std::ratio<1, 1000000>> delay, TF && task, const unsigned char mode) :
 			nextExecution(nextExecution),
 			delay(delay),
-			task(std::move(task)),
+			task(std::forward<TF>(task)),
 			mode(mode) { }
 	SchedulingInfo() :
 			nextExecution(std::chrono::steady_clock::now()),
@@ -135,20 +137,20 @@ class SchedulingInfo {
 			task(T{}),
 			mode(0) { }
 	SchedulingInfo(const SchedulingInfo<T> & p) : nextExecution(p.nextExecution), delay(p.delay), task(p.task), mode(p.mode) { }
-	SchedulingInfo(SchedulingInfo<T> & p) : nextExecution(p.nextExecution), delay(p.delay), task(p.task), mode(p.mode) { }
-	SchedulingInfo(const SchedulingInfo<T> && p) noexcept : nextExecution(p.nextExecution), delay(p.delay), task(p.task), mode(p.mode) { }
-	SchedulingInfo(SchedulingInfo<T> && p) noexcept : nextExecution(p.nextExecution), delay(p.delay), task(p.task), mode(p.mode) { }
+	SchedulingInfo(SchedulingInfo<T> && p) noexcept : nextExecution(p.nextExecution), delay(p.delay), task(std::move(p.task)), mode(p.mode) { }
 	SchedulingInfo<T>& operator=(const SchedulingInfo<T> & p) {
 		nextExecution = p.nextExecution;
 		delay = p.delay;
 		task = p.task;
 		mode = p.mode;
+		return *this;
 	}
 	SchedulingInfo<T>& operator=(SchedulingInfo<T> && p) noexcept {
 		nextExecution = std::move(p.nextExecution);
 		delay = std::move(p.delay);
 		task = std::move(p.task);
 		mode = std::move(p.mode);
+		return *this;
 	}
 	
 	std::chrono::steady_clock::time_point nextExecution;
@@ -188,62 +190,68 @@ class ScheduledThreadPool : public ThreadPool<SchedulingInfo<T>> {
 		ThreadPool<SchedulingInfo<T>>::stop();
 	}
 	
-	void execute(unsigned long delay, const T task) {
+	template<typename TF>
+	void execute(unsigned long delay, TF && task) {
 		std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
 		
+		const auto info = SchedulingInfo<T>{now + std::chrono::microseconds(delay * 1000), std::chrono::microseconds(0), std::forward<TF>(task), 0};
 		mLock.lock();
-		mQueue.emplace(now + std::chrono::microseconds(delay * 1000), std::chrono::microseconds(0), task, 0);
+		mQueue.insert(std::upper_bound(mQueue.begin(), mQueue.end(), info), std::move(info));
 		mLock.unlock();
 		mCondition.notify_all();
 	}
 	
-	void executeWithFixedRate(unsigned long initialDelay, unsigned long periodicDelay, const T task) {
+	template<typename TF>
+	void executeWithFixedRate(unsigned long initialDelay, unsigned long periodicDelay, TF && task) {
 		std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
 		
+		auto info = SchedulingInfo<T>{now + std::chrono::microseconds(initialDelay * 1000), std::chrono::microseconds(periodicDelay * 1000), std::forward<TF>(task), 1};
 		mLock.lock();
-		mQueue.emplace(now + std::chrono::microseconds(initialDelay * 1000), std::chrono::microseconds(periodicDelay * 1000), task, 1);
+		mQueue.insert(std::upper_bound(mQueue.begin(), mQueue.end(), info), std::move(info));
 		mLock.unlock();
 		mCondition.notify_all();
 	}
 	
-	void executeWithFixedDelay(unsigned long initialDelay, unsigned long periodicDelay, const T task) {
+	template<typename TF>
+	void executeWithFixedDelay(unsigned long initialDelay, unsigned long periodicDelay, TF && task) {
 		std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
 		
+		const auto info = SchedulingInfo<T>{now + std::chrono::microseconds(initialDelay * 1000), std::chrono::microseconds(periodicDelay * 1000), std::forward<TF>(task), 2};
 		mLock.lock();
-		mQueue.emplace(now + std::chrono::microseconds(initialDelay * 1000), std::chrono::microseconds(periodicDelay * 1000), task, 2);
+		mQueue.emplace(std::upper_bound(mQueue.begin(), mQueue.end(), info), std::move(info));
 		mLock.unlock();
 		mCondition.notify_all();
 	}
 	
 	protected:
-	bool getTask(SchedulingInfo<T> & task) noexcept override {
+	void runTask() noexcept override {
 		std::unique_lock<std::mutex> lk(mLock);
 		if (mQueue.empty())
 			mCondition.wait(lk, [this]{return !mRunning || !mQueue.empty(); });
 		if (!mRunning || mQueue.empty()) // mRunning should also be false
-			return false;
+			return;
 		
 		// Wait for task to be ready
 		do {
-			const SchedulingInfo<T> &t = mQueue.top();
-			if (t.nextExecution < std::chrono::steady_clock::now()) {
-				task = std::move(const_cast<SchedulingInfo<T>&>(t)); // Const-ness is set by the priority queue, not the thread pool
-				break;
+			if (mQueue.begin()->nextExecution < std::chrono::steady_clock::now()) {
+				auto task = std::move(mQueue.front());
+				mQueue.erase(mQueue.begin());
+				lk.unlock();
+				mCondition.notify_one();
+				// Run
+				task();
+				onCompleted(std::move(task));
+				return;
 			}
-			mCondition.wait_until(lk, t.nextExecution, [this]{return !mRunning; });
+			mCondition.wait_until(lk, mQueue.begin()->nextExecution, [this]{return !mRunning; });
 			if (mQueue.empty())
 				mCondition.wait(lk, [this]{return !mRunning || !mQueue.empty(); });
 			if (!mRunning || mQueue.empty())
-				return false;
+				return;
 		} while (true);
-		mQueue.pop();
-		
-		lk.unlock();
-		mCondition.notify_one();
-		return true;
 	}
 	
-	void onCompleted(SchedulingInfo<T> & task) noexcept override {
+	void onCompleted(SchedulingInfo<T> && task) noexcept override {
 		switch (task.mode) {
 			case 1:
 				task.nextExecution += task.delay;
@@ -256,7 +264,7 @@ class ScheduledThreadPool : public ThreadPool<SchedulingInfo<T>> {
 		}
 		
 		mLock.lock();
-		mQueue.emplace(std::move(task));
+		mQueue.insert(std::upper_bound(mQueue.begin(), mQueue.end(), task), std::move(task));
 		mLock.unlock();
 		mCondition.notify_one();
 	}
@@ -264,7 +272,7 @@ class ScheduledThreadPool : public ThreadPool<SchedulingInfo<T>> {
 	private:
 	std::mutex mLock;
 	std::condition_variable mCondition;
-	std::priority_queue<SchedulingInfo<T>> mQueue;
+	std::vector<SchedulingInfo<T>> mQueue;
 	bool mRunning;
 	
 };

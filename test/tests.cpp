@@ -40,19 +40,31 @@ template<typename T>
 void testBlockingQueue(jlcommon::BlockingQueue<T> * q) {
 	// Test Throwing Exception
 	q->add("EXC");
+	ASSERT_EQ(1, q->size());
+	ASSERT_FALSE(q->empty());
 	ASSERT_STREQ("EXC", q->element());
 	ASSERT_STREQ("EXC", q->remove());
 	ASSERT_THROW(q->element(), jlcommon::QueueException);
 	ASSERT_THROW(q->remove(), jlcommon::QueueException);
+	ASSERT_EQ(0, q->size());
+	ASSERT_TRUE(q->empty());
 	// Test Special Value
 	q->offer("SV");
+	ASSERT_EQ(1, q->size());
+	ASSERT_FALSE(q->empty());
 	ASSERT_STREQ("SV", q->peek());
 	ASSERT_STREQ("SV", q->poll());
 	ASSERT_STREQ(nullptr, q->peek());
 	ASSERT_STREQ(nullptr, q->poll());
+	ASSERT_EQ(0, q->size());
+	ASSERT_TRUE(q->empty());
 	// Test Blocks (No Block)
 	q->put("BLK");
+	ASSERT_EQ(1, q->size());
+	ASSERT_FALSE(q->empty());
 	ASSERT_STREQ("BLK", q->take());
+	ASSERT_EQ(0, q->size());
+	ASSERT_TRUE(q->empty());
 	// Test Blocks
 	{
 		bool success1 = false;
@@ -153,13 +165,41 @@ TEST(ThreadPoolTest, ScheduledThreadPool_WithFixedDelay) {
 		auto cur = std::chrono::high_resolution_clock::now();
 		difference += abs(std::chrono::duration_cast<std::chrono::microseconds>(cur - prevExecution).count() - 6000);
 		iterations++;
-		prevExecution = cur;
+		prevExecution = std::chrono::high_resolution_clock::now();
 		usleep(1000);
 	});
 	usleep(50000);
 	threadPool->stop();
 	ASSERT_LT((difference / double(iterations)), 1000);
 	ASSERT_GE(iterations, 8);
+}
+
+class GenericTask {
+	public:
+	GenericTask() = default;
+	GenericTask(const GenericTask & task) { ++copies; }
+	GenericTask(GenericTask && task) noexcept { ++moves; }
+	GenericTask & operator=(const GenericTask & task) { ++copies; return *this; }
+	GenericTask & operator=(GenericTask && task) noexcept { ++moves; return *this; }
+	
+	void operator()() {}
+	
+	static std::atomic_int copies;
+	static std::atomic_int moves;
+};
+
+std::atomic_int GenericTask::copies = 0;
+std::atomic_int GenericTask::moves = 0;
+
+TEST(ThreadPoolTest, ScheduledThreadPool_CopyMove) {
+	auto threadPool = std::make_unique<jlcommon::ScheduledThreadPool<GenericTask>>(1);
+	threadPool->start();
+	
+	threadPool->executeWithFixedDelay(6, 5, GenericTask{});
+	usleep(50000);
+	threadPool->stop();
+	ASSERT_EQ(1, static_cast<int>(GenericTask::copies)); // we allow one initial copy
+	ASSERT_GT(static_cast<int>(GenericTask::moves), 0);
 }
 
 TEST(ThreadPoolTest, ScheduledThreadPool_Interrupt) {
@@ -259,7 +299,7 @@ class CustomService1 final : public jlcommon::Service {
 		return true;
 	}
 	
-	bool isOperational() const noexcept override {
+	[[nodiscard]] bool isOperational() const noexcept override {
 		return !initialized;
 	}
 	
@@ -271,7 +311,7 @@ class CustomService1 final : public jlcommon::Service {
 
 volatile bool CustomService1::initialized = false;
 
-class CustomManager final : public jlcommon::Manager {
+	class CustomManager final : public jlcommon::Manager<jlcommon::Service> {
 	public:
 	CustomManager() {
 		addChild(std::make_unique<CustomService1>());

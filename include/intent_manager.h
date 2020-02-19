@@ -4,7 +4,8 @@
 
 #pragma once
 
-#include <blocking_queue.h>
+#include "blocking_queue.h"
+#include "log.h"
 
 #include <unordered_map>
 #include <utility>
@@ -18,6 +19,7 @@
 #include <utility>
 #include <map>
 #include <tuple>
+#include <string>
 
 namespace jlcommon {
 
@@ -67,11 +69,13 @@ class IntentHandler : public GenericIntentRunner {
 template<typename T>
 class IntentRunner : public IntentManagerHelper::GenericIntentRunner {
 	public:
-	void subscribe(const IntentCallback<T> && handler, std::string && name) noexcept {
+	
+	inline void subscribe(std::string && name, const IntentCallback<T> && handler) noexcept {
 		mHandlers.emplace_back(std::make_shared<IntentManagerHelper::IntentHandler<T>>(std::move(handler), std::move(name)));
 	}
 	
-	void broadcast(LinkedBlockingQueue<IntentCallbackCompiled> & executionQueue, const T & arg) noexcept {
+	inline unsigned int broadcast(LinkedBlockingQueue<IntentCallbackCompiled> & executionQueue, const T & arg) noexcept {
+		unsigned int handlerCount = 0;
 		for (auto & f : mHandlers) {
 			executionQueue.add([f, arg]() {
 				try {
@@ -89,7 +93,9 @@ class IntentRunner : public IntentManagerHelper::GenericIntentRunner {
 					Log::error("Exception thrown when handling %s in %s. Unknown Error.", typeid(T).name(), f->name.c_str());
 				}
 			});
+			handlerCount++;
 		}
+		return handlerCount;
 	}
 	
 	std::map<std::pair<std::string, std::string>, uint64_t> getIntentTiming() override {
@@ -110,29 +116,20 @@ class IntentManager {
 	private:
 	template<typename T>
 	inline void internalSubscribe(std::string && name, const IntentCallback<T> && handler) noexcept {
-		auto type = std::type_index(typeid(T));
-		auto it = mHandlers.find(type);
-		if (it == mHandlers.end()) {
-			auto runner = std::make_shared<IntentRunner<T>>();
-			mHandlers[type] = runner;
-			runner->subscribe(std::move(handler), std::move(name));
-		} else {
-			auto runner = it->second; // Stored as local variable to ensure memory is not cleaned up
-			reinterpret_cast<IntentRunner<T>*>(runner.get())->subscribe(std::move(handler), std::move(name));
+		for (auto & runners : mHandlers) {
+			if (runners.first == typeid(T)) {
+				reinterpret_cast<IntentRunner<T>*>(runners.second.get())->subscribe(std::move(name), std::move(handler));
+				return;
+			}
 		}
+		auto runner = std::make_shared<IntentRunner<T>>();
+		mHandlers.emplace_back(typeid(T), runner);
+		runner->subscribe(std::move(name), std::move(handler));
 	}
 	
 	public:
 	IntentManager() = default;
-	IntentManager(const IntentManager & im) = delete;
-	IntentManager(const IntentManager && rhs) = delete;
-	IntentManager(IntentManager && rhs) noexcept : mHandlers(std::move(rhs.mHandlers)), mExecutionQueue(std::move(rhs.mExecutionQueue)) { }
-	IntentManager & operator =(IntentManager && rhs) noexcept {
-		mHandlers = std::move(rhs.mHandlers);
-		mExecutionQueue = std::move(rhs.mExecutionQueue);
-		return *this;
-	}
-	
+
 	template<typename T>
 	void subscribe(std::string name, const IntentCallback<T> handler) noexcept {
 		internalSubscribe(std::move(name), std::move(handler));
@@ -144,12 +141,16 @@ class IntentManager {
 	}
 	
 	template<typename T>
-	void broadcast(T && arg) noexcept {
-		auto it = mHandlers.find(std::type_index(typeid(T)));
-		if (it != mHandlers.end()) {
-			auto runner = it->second; // Stored as local variable to ensure memory is not cleaned up
-			reinterpret_cast<IntentRunner<T>*>(runner.get())->broadcast(mExecutionQueue, std::forward<T>(arg));
+	unsigned int broadcast(T && arg) noexcept {
+		for (auto & runners : mHandlers) {
+			if (runners.first == typeid(T)) {
+				return reinterpret_cast<IntentRunner<T>*>(runners.second.get())->broadcast(mExecutionQueue, std::forward<T>(arg));
+			}
 		}
+#ifdef DEBUG_INTENT_MANAGER_NO_SUBSCRIBERS
+		Log::warn("No matching subscribers for intent type: %s", typeid(T).name());
+#endif
+		return 0;
 	}
 	
 	void runUntilEmpty() {
@@ -180,7 +181,7 @@ class IntentManager {
 	}
 	
 	void printIntentTiming() const {
-		unsigned int maxName = 1;
+		size_t maxName = 1;
 		std::vector<std::tuple<std::string, std::string, uint64_t>> records;
 		for (auto & handler : mHandlers) {
 			for (auto & timing : handler.second->getIntentTiming()) {
@@ -209,7 +210,7 @@ class IntentManager {
 	}
 	
 	private:
-	std::unordered_map<std::type_index, std::shared_ptr<IntentManagerHelper::GenericIntentRunner>> mHandlers;
+	std::vector<std::pair<std::type_index, std::shared_ptr<IntentManagerHelper::GenericIntentRunner>>> mHandlers;
 	LinkedBlockingQueue<IntentCallbackCompiled> mExecutionQueue;
 	std::atomic_bool mRunning{true};
 	

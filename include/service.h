@@ -4,8 +4,11 @@
 
 #pragma once
 
+#include "intent_manager.h"
+
 #include <string>
 #include <utility>
+#include <memory>
 
 namespace jlcommon {
 
@@ -17,17 +20,33 @@ class Service {
 	
 	virtual bool start() { return true; }
 	
-	virtual bool isOperational() const noexcept { return true; }
+	[[nodiscard]] virtual bool isOperational() const noexcept { return true; }
 	
 	virtual bool stop() { return true; }
 	
 	virtual bool terminate() { return true; }
 	
-	virtual std::string name() const { return "Service"; }
+	[[nodiscard]] virtual std::string name() const noexcept { return "Service"; }
 	
-	inline std::shared_ptr<IntentManager> getIntentManager() const noexcept { return mIntentManager; }
+	[[nodiscard]] inline std::shared_ptr<IntentManager> getIntentManager() const noexcept { return mIntentManager; }
 	
 	virtual void setIntentManager(std::shared_ptr<IntentManager> intentManager) noexcept { this->mIntentManager = std::move(intentManager); }
+	
+	protected:
+	template<typename Intent>
+	inline void subscribe(const std::shared_ptr<IntentManager>& intentManager, IntentCallback<Intent> && handler) {
+		intentManager->subscribe<Intent>(name(), handler);
+	}
+	
+	template<typename Intent>
+	inline void subscribe(const std::shared_ptr<IntentManager>& intentManager, const IntentCallback<Intent> & handler) {
+		intentManager->subscribe<Intent>(name(), handler);
+	}
+	
+	template<typename Intent, typename ServiceName>
+	inline void subscribe(const std::shared_ptr<IntentManager>& intentManager, void(ServiceName::*function)(const Intent &)) {
+		intentManager->subscribe<Intent>(name(), std::bind(function, static_cast<ServiceName*>(this), std::placeholders::_1));
+	}
 	
 	private:
 	std::shared_ptr<IntentManager> mIntentManager;
