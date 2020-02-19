@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.7)
 
-project(jlcommon LANGUAGES CXX VERSION 1.0.0)
+project(jlcommon LANGUAGES CXX VERSION 1.0.1)
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -11,7 +11,6 @@ set_target_properties(jlcommon PROPERTIES VERSION ${PROJECT_VERSION})
 set_target_properties(jlcommon PROPERTIES SOVERSION 1)
 target_include_directories(jlcommon PRIVATE include)
 target_include_directories(jlcommon PRIVATE src)
-set(CMAKE_BUILD_TYPE Debug)
 
 if(MSVC)
 	target_compile_options(jlcommon PRIVATE /W4 /WX)
